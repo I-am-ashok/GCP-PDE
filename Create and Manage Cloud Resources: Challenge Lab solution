@@ -6,7 +6,11 @@ Use the default image type (Debian Linux).
 
 Solution:
 ----------
-gcloud compute instances create nucleus-jumphost-642 --machine-type=f1-micro
+gcloud compute instances create nucleus-jumphost-651 \
+    --project=qwiklabs-gcp-00-6c7d54711fdc \
+    --zone=us-central1-a \
+    --machine-type=f1-micro \
+    --network-interface=network-tier=PREMIUM,
 
 
 
@@ -20,11 +24,11 @@ Expose the app on port 8080.
 
 Solution:
 ----------
-gcloud container clusters create --machine-type=e2-medium --zone=us-central1-b zonal-cluster 
+gcloud container clusters create --machine-type=e2-medium --zone=us-central1-a zonal-cluster 
 
 kubectl create deployment docker-container --image=gcr.io/google-samples/hello-app:2.0
 
-kubectl expose deployment docker-container --type=LoadBalancer --port 8080
+kubectl expose deployment docker-container --type=LoadBalancer --port 8083
 
 
 
@@ -33,6 +37,8 @@ Task 3. Set up an HTTP load balancer
 You will serve the site via nginx web servers, but you want to ensure that the environment is fault-tolerant. Create an HTTP load balancer with a managed instance group of 2 nginx web servers. Use the following code to configure the web servers; the team will replace this with their own configuration later.
 
 Note: There is a limit to the resources you are allowed to create in your project, so do not create more than 2 instances in your managed instance group. If you do, the lab might end and you might be banned.
+
+
 cat << EOF > startup.sh
 #! /bin/bash
 apt-get update
@@ -44,63 +50,64 @@ EOF
 
 Solution:
 ----------
-Create an instance template
+1. Create an instance template
 
-gcloud compute instance-templates create nginx-web-server-template \
-          --metadata-from-file startup-script=startup.sh
+gcloud compute instance-templates create web-server-template \
+          --metadata-from-file startup-script=startup.sh \
+          --network nucleus-vpc \
           --machine-type e2-small \
-          --region us-central1
-
-gcloud compute instance-groups managed create nginx-web-server-group \
+          --region us-east1
+          
+2. Create a target pool.
+ gcloud compute target-pools create www-pool \
+    --region  us-east1
+    
+3. Create a managed instance group
+gcloud compute instance-groups managed create web-server-group \
           --base-instance-name web-server \
           --size 2 \
-          --template nginx-web-server-template \
-          --region us-central1
+          --template web-server-template \
+          --region us-east1
+          
+4. Create a firewall rule named as allow-tcp-rule-505 to allow traffic (80/tcp)
 
-Create a target pool
+gcloud compute firewall-rules create allow-tcp-rule-505 \
+          --allow tcp:80 \
+          --network nucleus-vpc
+ 
+5. Create a health check.
+gcloud compute http-health-checks create http-basic-check
 
-
-
-
+6.Create a backend service, and attach the managed instance group with named port (http:80).
 gcloud compute instance-groups managed \
-          set-named-ports nginx-web-server-group \
+          set-named-ports web-server-group \
           --named-ports http:80 \
-          --region us-central11
-          
-          
-          
-  gcloud compute backend-services create nginx-web-server-backend \
+          --region us-east1
+
+gcloud compute backend-services create web-server-backend \
           --protocol HTTP \
           --http-health-checks http-basic-check \
           --global
 
-gcloud compute backend-services add-backend nginx-web-server-backend \
-          --instance-group nginx-web-server-group \
-          --instance-group-region us-central1 \
+gcloud compute backend-services add-backend web-server-backend \
+          --instance-group web-server-group \
+          --instance-group-region us-east1 \
           --global
-          
-gcloud compute firewall-rules create accept-tcp-rule-415 \
-  --network=default \
-  --action=allow \
-  --direction=ingress \
-  --source-ranges=130.211.0.0/22,35.191.0.0/16 \
-  --target-tags=allow-health-check \
-  --rules=tcp:80
-  
-  gcloud compute health-checks create http http-basic-check \
-  --port 80
-  
-gcloud compute url-maps create nginx-web-server-map \
-          --default-service nginx-web-server-backend
+
+
+7. Create a URL map, and target the HTTP proxy to route requests to your URL map.
+gcloud compute url-maps create web-server-map \
+          --default-service web-server-backend
 
 gcloud compute target-http-proxies create http-lb-proxy \
-          --url-map nginx-web-server-map
-
+          --url-map web-server-map
+          
+          
+8.Create a forwarding rule.
 gcloud compute forwarding-rules create http-content-rule \
         --global \
         --target-http-proxy http-lb-proxy \
         --ports 80
 
-gcloud compute forwarding-rules list        
-          
-  
+9. display the forwardrule
+gcloud compute forwarding-rules list
